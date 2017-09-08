@@ -13,6 +13,9 @@ filters = (
 )
 
 
+timeout = Value('i', 1)
+
+
 def log(message):
 
     if all([filter in message for filter in filters]):
@@ -20,7 +23,7 @@ def log(message):
 
 
 def read_available(socket):
-    return select([socket], [], [], 0)[0]
+    return select([socket], [], [], timeout.value)[0]
 
 
 class Pi:

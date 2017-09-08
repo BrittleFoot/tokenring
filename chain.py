@@ -6,15 +6,16 @@ import sfml
 import math
 import os
 
-from time import sleep, time
-from collections import deque
-from select import select
-from threading import Thread
-from multiprocessing import Process, Value, Queue, Manager
-from proto import recv_command_udp, make_command
-from pi import Pi
+from pi import Pi, timeout
 from sfml import sf
+from time import sleep, time
+from proto import recv_command_udp, make_command
+from select import select
+from hashlib import sha1
 from command import COMMAND
+from threading import Thread
+from collections import deque
+from multiprocessing import Process, Value, Queue, Manager
 
 
 def log(msg):
@@ -133,6 +134,18 @@ def get_cloth_under(clothes, v):
     return None
 
 
+def draw_world(world, window, brush):
+    if not world:
+        return
+
+    for id, (x, y) in world.items():
+        id = int.from_bytes(id, 'big')
+        brush.position = sf.Vector2(x, y) * 5
+        hsh = [b for b in sha1(id.to_bytes(2, 'big')).digest()[:3]]
+        brush.fill_color = sf.Color(*hsh)
+        window.draw(brush)
+
+
 def mainloop(pis):
 
     size = sf.Vector2(1024, 600)
@@ -152,17 +165,20 @@ def mainloop(pis):
     world = None
 
     brush = sf.CircleShape(10)
+    selected = set()
 
     while window.is_open:
         for event in window.events:
             if event == sf.Event.CLOSED:
                 window.close()
             if event == sf.Event.MOUSE_BUTTON_PRESSED:
-                if event['button'] == sfml.window.Button.RIGHT:
-                    v = sf.Vector2(event['x'], event['y']) - size / 2
-                    oc = get_cloth_under(clothes, v)
-                    if oc:
-                        observable_cloth = oc
+                v = sf.Vector2(event['x'], event['y']) - size / 2
+                target = get_cloth_under(clothes, v)
+                if event['button'] == sfml.window.Button.LEFT and target:
+                    methods = ['add', 'remove']
+                    getattr(selected, methods[target in selected])(target)
+                if event['button'] == sfml.window.Button.RIGHT and target:
+                    observable_cloth = target
 
         t = time()
         maxtime = max(t - c.pi.ltt for c in clothes if c.pi.ltt > 0)
@@ -180,7 +196,7 @@ def mainloop(pis):
             observable_cloth.fill_color = sf.Color.BLUE
             world = observable_cloth.pi.world
 
-        if selected_player:
+        for selected_player in selected:
             selected_player.fill_color = sf.Color.YELLOW
             play_with_selected(selected_player)
 
@@ -189,15 +205,9 @@ def mainloop(pis):
         for c in clothes:
             window.draw(c)
 
-        if world:
-            for id, (x, y) in world.items():
-                id = int.from_bytes(id, 'big')
-                brush.position = sf.Vector2(x, y) * 5
-                window.draw(brush)
+        draw_world(world, window, brush)
 
         window.display()
-
-    list(map(Pi.stop, pis.values()))
 
 
 def novisualise_mainloop(pis):
@@ -214,6 +224,7 @@ def main(args):
     portrange = range(args.initial_port, args.initial_port + args.ncount)
     portrange = list(portrange)
     portrange.append(portrange[0])
+    timeout.value = int(args.blocking)
 
     sync_manager = Manager()
 
@@ -236,8 +247,12 @@ def main(args):
     initiator = sk.socket(sk.AF_INET, sk.SOCK_DGRAM)
     initiator.sendto(make_command(COMMAND.TOKEN), ('127.0.0.1', portrange[0]))
 
-    mainloop(pis)
-    return
+    try:
+        mainloop(pis)
+    except KeyboardInterrupt:
+        log("^C")
+    finally:
+        list(map(Pi.stop, pis.values()))
 
 
 def parse_args():
@@ -252,6 +267,7 @@ def parse_args():
 
     aa("initial_port", type=int)
     aa("ncount", type=int, nargs='?', default=3)
+    aa("--blocking", "-b", action="store_true")
 
     return parser.parse_args()
 
